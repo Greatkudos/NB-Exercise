@@ -15,6 +15,11 @@ import SwiftUI
 struct NowPlayingBar: View {
     @Bindable var store: PodcastStore
 
+    /// The speeds offered in the menu. Nexus had a slider in its full-screen
+    /// player; with only this bar to put a control in, a short fixed list is
+    /// both easier to hit and what people actually pick.
+    private static let rates: [Float] = [0.8, 1.0, 1.25, 1.5, 1.75, 2.0]
+
     var body: some View {
         if let episode = store.playback.currentEpisode {
             VStack(spacing: 0) {
@@ -68,6 +73,8 @@ struct NowPlayingBar: View {
 
     private var controls: some View {
         HStack(spacing: 16) {
+            speedMenu
+
             Button {
                 store.playback.skipBackward()
             } label: {
@@ -95,5 +102,40 @@ struct NowPlayingBar: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
+    }
+
+    /// Goes through the store rather than the player directly, so the chosen
+    /// speed is remembered for this show and applied the next time one of its
+    /// episodes starts.
+    private var speedMenu: some View {
+        Menu {
+            Picker("Playback Speed", selection: rateBinding) {
+                ForEach(Self.rates, id: \.self) { rate in
+                    Text(Self.label(for: rate)).tag(rate)
+                }
+            }
+        } label: {
+            Text(Self.label(for: store.playback.playbackRate))
+                .font(.footnote.weight(.semibold))
+                .monospacedDigit()
+                // Right-aligned with a floor, so the transport doesn't shuffle
+                // sideways as the label grows from "1×" to "1.75×".
+                .frame(minWidth: 38, alignment: .trailing)
+        }
+        .accessibilityLabel("Playback speed")
+        .accessibilityValue(Self.label(for: store.playback.playbackRate))
+    }
+
+    private var rateBinding: Binding<Float> {
+        Binding(
+            get: { store.playback.playbackRate },
+            set: { store.setPlaybackRate($0) }
+        )
+    }
+
+    /// "1×", "1.25×" — trailing zeros dropped so the common speeds stay short.
+    private static func label(for rate: Float) -> String {
+        let number = Double(rate).formatted(.number.precision(.fractionLength(0...2)))
+        return "\(number)×"
     }
 }
