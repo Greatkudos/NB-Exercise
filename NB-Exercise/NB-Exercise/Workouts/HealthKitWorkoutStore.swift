@@ -55,9 +55,10 @@ final class HealthKitWorkoutStore: WorkoutDataSource, @unchecked Sendable {
     func requestAuthorization() async throws -> WorkoutAuthorizationState {
         guard isAvailable else { return .unavailable }
 
-        // Read-only: the share set is empty. When recording lands (see
-        // `WorkoutRecorder`), `HKQuantityType.workoutType()` joins the share
-        // set and this call gains a `toShare:` argument.
+        // Read-only: the share set stays empty even though the app now writes
+        // workouts. `HealthKitWorkoutRecorder` asks for the write scope
+        // itself, when the user first starts a session — so someone who only
+        // ever looks at Stats is never asked for permission to write.
         try await store.requestAuthorization(toShare: [], read: readTypes)
 
         // HealthKit won't reveal read permission — `authorizationStatus(for:)`
@@ -170,7 +171,11 @@ final class HealthKitWorkoutStore: WorkoutDataSource, @unchecked Sendable {
     /// `totalEnergyBurned` / `totalDistance` properties, which Apple
     /// deprecated in iOS 18 — the statistics API is also what correctly
     /// handles workouts HealthKit has since condensed into quantity series.
-    private static func summary(from workout: HKWorkout) -> WorkoutSummary {
+    ///
+    /// Internal rather than private so `HealthKitWorkoutRecorder` can map the
+    /// workout it just saved the same way a fetched one is mapped, instead of
+    /// keeping a second copy of this logic in step with it.
+    static func summary(from workout: HKWorkout) -> WorkoutSummary {
         let activity = ExerciseActivity(workout.workoutActivityType)
 
         let energy = workout

@@ -273,6 +273,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "NB-Exercise/Info.plist";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "NB-Exercise reads your workouts and activity data to show your exercise stats.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "NBExercise saves your timed exercise sessions to Health as workouts, so they count towards your activity rings and appear alongside your other workouts.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -315,6 +316,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "NB-Exercise/Info.plist";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "NB-Exercise reads your workouts and activity data to show your exercise stats.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "NBExercise saves your timed exercise sessions to Health as workouts, so they count towards your activity rings and appear alongside your other workouts.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;

@@ -9,10 +9,10 @@
 //       times a second, and the duration slider shouldn't redraw with it.
 //    2. A selectable `ExerciseActivity` and a longer maximum, since an
 //       exercise session isn't bounded by a 25-minute pomodoro.
-//    3. Calls into an optional `WorkoutRecorder` at every lifecycle point.
-//       That reference is `nil` today — see `WorkoutRecorder.swift`. The
-//       hooks exist now so switching recording on later is an injection
-//       rather than a rewrite of this file.
+//    3. Calls into an optional `WorkoutRecorder` at every lifecycle point,
+//       which records the session to HealthKit and publishes the live metrics
+//       the view shows under the countdown. Optional so the timer still runs
+//       in previews and tests without a Health dependency.
 //
 //  The timing approach is unchanged from Nexus and worth preserving: elapsed
 //  time is derived from an absolute `endDate`, never accumulated tick by
@@ -51,15 +51,22 @@ final class ExerciseTimerStore {
 
     // MARK: - Recording seam
 
-    /// Records the session to HealthKit while the timer runs. `nil` today:
-    /// the app is read-only. Every call site below tolerates that, so
-    /// assigning a real recorder is the only change needed to turn recording
-    /// on. See `WorkoutRecorder.swift`.
-    var recorder: WorkoutRecorder?
+    /// Records the session to HealthKit while the timer runs. Injected in
+    /// `NBExerciseApp`; still optional so previews and tests can run the timer
+    /// without touching Health. Every call site below tolerates `nil`.
+    var recorder: (any WorkoutRecorder)?
 
     /// Whether a recording is currently attached and live — drives the "REC"
     /// affordance in the timer view.
     var isRecording: Bool { recorder?.state.isActive ?? false }
+
+    /// The live figures for the session in progress, for the metrics strip
+    /// under the countdown. `.empty` when nothing is recording.
+    ///
+    /// Reading through to the recorder rather than mirroring its values means
+    /// a view touching this observes the recorder directly, so each sample
+    /// HealthKit collects invalidates only the strip.
+    var liveMetrics: LiveWorkoutMetrics { recorder?.metrics ?? .empty }
 
     // MARK: - Internal timing state
 

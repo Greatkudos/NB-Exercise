@@ -19,6 +19,10 @@ struct ExerciseTimerView: View {
                     VStack(spacing: 28) {
                         countdown(in: geo.size)
 
+                        if store.isRecording {
+                            liveMetrics
+                        }
+
                         if store.hasFinished {
                             Text("\(store.activity.displayName) complete")
                                 .font(.headline)
@@ -82,6 +86,55 @@ struct ExerciseTimerView: View {
         let widthBudget = size.width * 0.22
         let heightBudget = size.height * 0.28
         return min(max(min(widthBudget, heightBudget), 36), 160)
+    }
+
+    // MARK: - Live metrics
+
+    /// The figures HealthKit is collecting right now. Shown only while a
+    /// recording is live — with nothing to report it would just be a row of
+    /// dashes competing with the countdown.
+    private var liveMetrics: some View {
+        let metrics = store.liveMetrics
+        // Formatted here rather than with `map`, which would hand the
+        // main-actor-isolated formatters to a nonisolated closure.
+        let heartRate = if let bpm = metrics.heartRate {
+            Format.heartRate(bpm)
+        } else {
+            "—"
+        }
+        let energy = if let kilocalories = metrics.activeEnergyBurnedKilocalories {
+            Format.energy(kilocalories)
+        } else {
+            "—"
+        }
+
+        return HStack(spacing: 0) {
+            LiveMetric(
+                title: "Heart Rate",
+                value: heartRate,
+                symbol: "heart.fill",
+                tint: .pink
+            )
+            LiveMetric(
+                title: "Energy",
+                value: energy,
+                symbol: "flame.fill",
+                tint: .orange
+            )
+            // Distance is meaningless for strength work and yoga, so the
+            // recorder reports nil and the tile drops out rather than
+            // claiming a flat zero.
+            if let distance = metrics.distanceMeters {
+                LiveMetric(
+                    title: "Distance",
+                    value: Format.distance(distance),
+                    symbol: "point.topleft.down.to.point.bottomright.curvepath",
+                    tint: .teal
+                )
+            }
+        }
+        .padding(.vertical, 12)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
     }
 
     // MARK: - Activity
@@ -174,6 +227,34 @@ struct ExerciseTimerView: View {
         !store.isRunning
             && !store.hasFinished
             && store.remaining == TimeInterval(store.durationMinutes * 60)
+    }
+}
+
+/// One live figure in the strip under the countdown.
+private struct LiveMetric: View {
+    let title: String
+    let value: String
+    let symbol: String
+    let tint: Color
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: symbol)
+                .font(.caption)
+                .foregroundStyle(tint)
+            Text(value)
+                .font(.headline)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(value)
     }
 }
 

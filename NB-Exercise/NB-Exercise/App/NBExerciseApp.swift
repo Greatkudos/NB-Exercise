@@ -43,7 +43,12 @@ struct NBExerciseApp: App {
 
         let playback = PodcastPlaybackController()
 
-        _timerStore = State(initialValue: ExerciseTimerStore())
+        // The recorder is attached here rather than created by the timer so
+        // the timer stays runnable without HealthKit (see its `#Preview`).
+        let timer = ExerciseTimerStore()
+        timer.recorder = HealthKitWorkoutRecorder()
+
+        _timerStore = State(initialValue: timer)
         _statsStore = State(
             initialValue: WorkoutStatsStore(source: HealthKitWorkoutStore())
         )

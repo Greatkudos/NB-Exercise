@@ -2,29 +2,26 @@
 //  WorkoutRecorder.swift
 //  NBExercise
 //
-//  The write seam — declared now, deliberately unimplemented.
+//  The write seam. `HealthKitWorkoutRecorder` is the live implementation;
+//  `ExerciseTimerStore` holds one and calls it at every transport point.
 //
-//  The app currently only reads from Health. When recording is added, it
-//  arrives as a single `HKWorkoutSession`-backed conformance to this protocol,
-//  injected into `ExerciseTimerStore`. The timer already calls every hook at
-//  the right moment; today they land on `nil` and do nothing.
+//  Two things flow back out of a recorder:
 //
-//  Keeping the protocol in the tree — rather than "we'll design it later" —
-//  is what makes that true. The timer's control flow is already shaped around
-//  a recorder's lifecycle, so turning recording on can't force the timer, the
-//  views, or the stats layer to change.
+//    - `state`, so the timer knows whether a session is live and the view can
+//      show the "REC" affordance.
+//    - `metrics`, the live figures the Exercise tab renders while the session
+//      runs. This is the whole point of recording in-app rather than reading
+//      Health after the fact: the Stats tab is a weekly review and only
+//      updates on refresh, so nothing there can give feedback mid-session.
 //
-//  What a real implementation will need beyond this file:
-//    - `HKHealthStore.requestAuthorization(toShare:read:)` including
-//      `HKQuantityType.workoutType()` in the share set.
-//    - The `com.apple.developer.healthkit` entitlement (already present) plus
-//      `NSHealthUpdateUsageDescription` in Info.plist (not yet added — it's
-//      only required once the app actually writes).
-//    - The `workout-processing` background mode, so the session survives the
-//      screen locking mid-exercise.
+//  The protocol is `@MainActor` and `Observable`, so a view reading
+//  `store.liveMetrics` picks up each update without any plumbing — HealthKit's
+//  delegate callbacks arrive off the main actor and hop once, inside the
+//  recorder.
 //
 
 import Foundation
+import Observation
 
 /// Where a recording session currently is. Mirrors `HKWorkoutSessionState`
 /// without importing HealthKit, so the timer can switch on it freely.
@@ -46,12 +43,32 @@ enum RecordingState: Equatable, Sendable {
     }
 }
 
-/// Records a workout to HealthKit for the duration of a timed exercise.
+/// The live figures for a session in progress.
 ///
-/// Not implemented yet. `ExerciseTimerStore.recorder` is `nil`, and every call
-/// site tolerates that.
-protocol WorkoutRecorder: AnyObject, Sendable {
+/// Every metric is optional because which ones exist depends on the device and
+/// the activity: an iPhone has no heart-rate sensor (that needs a paired Watch
+/// or an external monitor), and strength work has no meaningful distance. The
+/// UI shows a dash rather than a zero for anything absent — a real 0 bpm and
+/// "we can't measure this" are very different claims.
+struct LiveWorkoutMetrics: Equatable, Sendable {
+    /// Time the session has been collecting, excluding paused stretches. Not
+    /// the same as the timer's countdown, which runs against wall-clock time.
+    var elapsed: TimeInterval = 0
+    var heartRate: Double?
+    var activeEnergyBurnedKilocalories: Double?
+    var distanceMeters: Double?
+
+    static let empty = LiveWorkoutMetrics()
+}
+
+/// Records a workout to HealthKit for the duration of a timed exercise.
+@MainActor
+protocol WorkoutRecorder: AnyObject, Observable {
     var state: RecordingState { get }
+
+    /// The live figures, updated as HealthKit collects samples. `.empty`
+    /// before a session starts.
+    var metrics: LiveWorkoutMetrics { get }
 
     /// Begins a session for `activity`. Throws rather than trapping so the
     /// timer can carry on running un-recorded if Health refuses.
