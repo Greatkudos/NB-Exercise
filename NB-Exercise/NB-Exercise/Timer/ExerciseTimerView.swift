@@ -12,6 +12,11 @@ import SwiftUI
 struct ExerciseTimerView: View {
     @Bindable var store: ExerciseTimerStore
 
+    /// Drives the popover explaining the recording indicator. The indicator
+    /// is the only place the app says it's writing to Health, so it has to be
+    /// able to explain itself on demand.
+    @State private var isShowingRecordingInfo = false
+
     var body: some View {
         NavigationStack {
             GeometryReader { geo in
@@ -55,10 +60,7 @@ struct ExerciseTimerView: View {
             .toolbar {
                 if store.isRecording {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Label("Recording", systemImage: "record.circle")
-                            .foregroundStyle(.red)
-                            .labelStyle(.iconOnly)
-                            .accessibilityLabel("Recording to Health")
+                        recordingIndicator
                     }
                 }
             }
@@ -86,6 +88,35 @@ struct ExerciseTimerView: View {
         let widthBudget = size.width * 0.22
         let heightBudget = size.height * 0.28
         return min(max(min(widthBudget, heightBudget), 36), 160)
+    }
+
+    // MARK: - Recording indicator
+
+    /// A red dot on its own told the user nothing — and the toolbar's button
+    /// treatment made it look tappable, which it wasn't. So it now carries a
+    /// visible label *and* actually responds, explaining what's being
+    /// recorded and the caveats that come with recording on iPhone.
+    private var recordingIndicator: some View {
+        Button {
+            isShowingRecordingInfo = true
+        } label: {
+            Label(
+                store.isRunning ? "Recording" : "Paused",
+                systemImage: store.isRunning ? "record.circle" : "pause.circle"
+            )
+        }
+        .tint(.red)
+        .accessibilityHint("Explains what this session records to Health")
+        .popover(isPresented: $isShowingRecordingInfo) {
+            RecordingInfoPopover(
+                activity: store.activity,
+                isPaused: !store.isRunning,
+                warning: store.recordingWarning
+            )
+            // Without this the popover becomes a sheet on iPhone, which is
+            // far too heavy for a one-paragraph explanation.
+            .presentationCompactAdaptation(.popover)
+        }
     }
 
     // MARK: - Live metrics
@@ -227,6 +258,45 @@ struct ExerciseTimerView: View {
         !store.isRunning
             && !store.hasFinished
             && store.remaining == TimeInterval(store.durationMinutes * 60)
+    }
+}
+
+/// What the recording indicator says when tapped.
+///
+/// Deliberately covers the two things the figures on screen can't explain for
+/// themselves: where the session is going, and why heart rate may read as a
+/// dash. Both are the kind of thing a user would otherwise read as a bug.
+private struct RecordingInfoPopover: View {
+    let activity: ExerciseActivity
+    let isPaused: Bool
+    let warning: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(
+                isPaused ? "Recording Paused" : "Recording to Health",
+                systemImage: isPaused ? "pause.circle" : "record.circle"
+            )
+            .font(.headline)
+            .foregroundStyle(.red)
+
+            Text("This session is being saved to Health as a \(activity.displayName.lowercased()) workout, so it counts towards your activity rings and appears in Stats when it finishes.")
+
+            // Stated up front because a dash where a number should be reads
+            // as a failure otherwise.
+            Text("Heart rate needs a paired Apple Watch or an external monitor — iPhone has no heart-rate sensor. Energy recorded on iPhone is estimated from movement.")
+                .foregroundStyle(.secondary)
+
+            if let warning {
+                Divider()
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.footnote)
+        .multilineTextAlignment(.leading)
+        .padding()
+        .frame(idealWidth: 280)
     }
 }
 

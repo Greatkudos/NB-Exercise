@@ -18,6 +18,11 @@ struct RootView: View {
     /// mid-routine, that's usually the timer.
     @SceneStorage("RootView.selectedTab") private var selection: TabSelection = .exercise
 
+    /// `@AppStorage` rather than `@SceneStorage`: this survives the app being
+    /// deleted from the app switcher, so the first-run screen is shown once
+    /// per install and not once per scene.
+    @AppStorage("RootView.hasCompletedOnboarding") private var hasCompletedOnboarding = false
+
     /// Not named `Tab`: that would shadow SwiftUI's `Tab` view inside this
     /// type, and the builders below would resolve to the enum instead.
     enum TabSelection: String {
@@ -43,6 +48,14 @@ struct RootView: View {
         // playback stays reachable while the timer runs.
         .safeAreaInset(edge: .bottom) {
             NowPlayingBar(store: podcastStore)
+        }
+        // A cover rather than a sheet: the three things it explains aren't
+        // stated anywhere else in the app, so it shouldn't be swipe-away-able
+        // before it's been read.
+        .fullScreenCover(isPresented: .constant(!hasCompletedOnboarding)) {
+            OnboardingView {
+                hasCompletedOnboarding = true
+            }
         }
     }
 }
