@@ -23,16 +23,14 @@ struct ExerciseTimerView: View {
                 ScrollView {
                     VStack(spacing: 28) {
                         countdown(in: geo.size)
+                        motivation
 
                         if store.isRecording {
                             liveMetrics
                         }
 
                         if store.hasFinished {
-                            Text("\(store.activity.displayName) complete")
-                                .font(.headline)
-                                .foregroundStyle(.tint)
-                                .transition(.opacity)
+                            completionBanner
                         }
 
                         if let warning = store.recordingWarning {
@@ -46,6 +44,7 @@ struct ExerciseTimerView: View {
                         activityPicker
                         durationControl
                         controlButtons
+                        motivationToggle
                     }
                     .frame(maxWidth: 520)
                     .frame(maxWidth: .infinity)
@@ -88,6 +87,64 @@ struct ExerciseTimerView: View {
         let widthBudget = size.width * 0.22
         let heightBudget = size.height * 0.28
         return min(max(min(widthBudget, heightBudget), 36), 160)
+    }
+
+    // MARK: - Motivation
+
+    /// The encouragement under the countdown. The store hands over one line
+    /// at a time and decides when it changes — this just shows it.
+    @ViewBuilder
+    private var motivation: some View {
+        // The slot only exists once a session is underway — reserving it on
+        // an untouched timer just reads as a gap. Within a session it holds
+        // a fixed height even while empty (paused, or between lines), so the
+        // countdown doesn't shuffle up and down as messages change.
+        if store.showsMotivation && !isAtRest {
+            Text(store.motivationalMessage ?? "")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+                // A new line is a new view, so the transition actually runs
+                // instead of the text swapping in place.
+                .id(store.motivationalMessage)
+                .transition(.opacity)
+                .animation(.easeInOut(duration: 0.35), value: store.motivationalMessage)
+                // It's the one thing on this screen a VoiceOver user
+                // couldn't otherwise tell had changed.
+                .accessibilityAddTraits(.updatesFrequently)
+        }
+    }
+
+    /// Shown when the clock reaches zero. The factual line stays put and the
+    /// congratulation sits under it, so turning the messages off loses the
+    /// flourish but never the confirmation that the session actually ended.
+    private var completionBanner: some View {
+        VStack(spacing: 8) {
+            Text("\(store.activity.displayName) complete")
+                .font(.headline)
+                .foregroundStyle(.tint)
+
+            if let congratulation = store.completionMessage {
+                Text(congratulation)
+                    .font(.title3.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .transition(.opacity)
+    }
+
+    private var motivationToggle: some View {
+        Toggle(isOn: $store.showsMotivation) {
+            Label("Motivational Messages", systemImage: "quote.bubble")
+        }
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .accessibilityHint("Shows encouragement under the countdown while a session runs")
     }
 
     // MARK: - Recording indicator

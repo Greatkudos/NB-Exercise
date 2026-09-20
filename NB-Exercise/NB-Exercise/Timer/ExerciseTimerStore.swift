@@ -49,6 +49,45 @@ final class ExerciseTimerStore {
 
     private static let endNotificationID = "com.maldeus.NBExercise.exerciseTimerEnd"
 
+    // MARK: - Motivation
+
+    /// Shows encouragement under the countdown while a session runs.
+    /// Persisted, and on by default — some people find it carries them
+    /// through the last five minutes, and some find it nagging.
+    var showsMotivation: Bool {
+        didSet {
+            UserDefaults.standard.set(showsMotivation, forKey: Self.motivationKey)
+            if showsMotivation {
+                if isRunning { motivation.resume() }
+            } else {
+                motivation.reset()
+                completionMessage = nil
+            }
+            motivationalMessage = motivation.message
+        }
+    }
+
+    /// The line currently shown under the countdown, or `nil` for none.
+    private(set) var motivationalMessage: String?
+
+    /// The sign-off for a session that reached zero, picked at random when
+    /// it finishes. Cleared when the next session starts.
+    private(set) var completionMessage: String?
+
+    /// Chooses the line. `@ObservationIgnored` because the view reads the
+    /// published `motivationalMessage`, not the provider's internals — which
+    /// churn on every tick.
+    @ObservationIgnored private var motivation = MotivationProvider()
+
+    private static let motivationKey = "ExerciseTimer.showsMotivation"
+
+    init() {
+        // `bool(forKey:)` would read a missing value as false, which would
+        // ship the feature switched off.
+        showsMotivation =
+            UserDefaults.standard.object(forKey: Self.motivationKey) as? Bool ?? true
+    }
+
     // MARK: - Recording seam
 
     /// Records the session to HealthKit while the timer runs. Injected in
@@ -83,6 +122,11 @@ final class ExerciseTimerStore {
         if !isRunning {
             remaining = TimeInterval(clamped * 60)
             hasFinished = false
+            // Which milestones are worth announcing depends on the length,
+            // so a new duration starts from a clean slate.
+            motivation.reset()
+            motivationalMessage = nil
+            completionMessage = nil
         }
     }
 
@@ -92,6 +136,7 @@ final class ExerciseTimerStore {
         guard !isRunning else { return }
         hasFinished = false
         recordingWarning = nil
+        completionMessage = nil
 
         let resumeFrom: TimeInterval = remaining > 0
             ? remaining
@@ -102,6 +147,13 @@ final class ExerciseTimerStore {
 
         scheduleTicker()
         scheduleEndNotification(in: resumeFrom)
+
+        // `resume` rather than a full restart: milestones already passed
+        // stay passed, so un-pausing doesn't re-announce the halfway mark.
+        if showsMotivation {
+            motivation.resume()
+            motivationalMessage = motivation.message
+        }
 
         // Resume an existing recording rather than starting a second one when
         // the user un-pauses.
@@ -133,6 +185,10 @@ final class ExerciseTimerStore {
         tickerTask = nil
         cancelEndNotification()
 
+        // "Keep going" over a stopped clock is the wrong thing to say. The
+        // provider keeps its state, so resuming picks up where it left off.
+        motivationalMessage = nil
+
         Task { [recorder] in await recorder?.pause() }
     }
 
@@ -146,6 +202,10 @@ final class ExerciseTimerStore {
         recordingWarning = nil
         remaining = TimeInterval(durationMinutes * 60)
         cancelEndNotification()
+
+        motivation.reset()
+        motivationalMessage = nil
+        completionMessage = nil
 
         // A reset is an abandonment, not a completion — discard rather than
         // save, so a mis-tap doesn't litter Health with 4-second workouts.
@@ -175,6 +235,7 @@ final class ExerciseTimerStore {
         let r = endDate.timeIntervalSinceNow
         guard r <= 0 else {
             remaining = r
+            updateMotivation(remaining: r)
             return
         }
 
@@ -185,6 +246,14 @@ final class ExerciseTimerStore {
         tickerTask?.cancel()
         tickerTask = nil
         playEndAlertSound()
+
+        // The countdown slot hands over to the sign-off, and the next
+        // session deserves a full deck and a fresh set of milestones.
+        motivation.reset()
+        motivationalMessage = nil
+        if showsMotivation {
+            completionMessage = motivation.congratulate()
+        }
 
         // The scheduled notification is either firing now or has already
         // fired — clear any delivered copy so the user doesn't meet a stale
@@ -199,6 +268,21 @@ final class ExerciseTimerStore {
                 self.recordingWarning =
                     "Couldn't save this session to Health: \(error.localizedDescription)"
             }
+        }
+    }
+
+    // MARK: - Motivation
+
+    private func updateMotivation(remaining: TimeInterval) {
+        guard showsMotivation else { return }
+        motivation.update(
+            remaining: remaining,
+            total: TimeInterval(durationMinutes * 60)
+        )
+        // This runs five times a second and `@Observable` invalidates on
+        // every assignment, so only publish when the line actually changes.
+        if motivationalMessage != motivation.message {
+            motivationalMessage = motivation.message
         }
     }
 
