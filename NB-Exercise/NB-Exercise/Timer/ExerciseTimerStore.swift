@@ -42,10 +42,10 @@ final class ExerciseTimerStore {
     private(set) var recordingWarning: String?
 
     static let minMinutes = 1
-    static let maxMinutes = 120
+    static let maxMinutes = 60
 
     /// Durations offered as one-tap presets, alongside the slider.
-    static let presets = [10, 20, 30, 45, 60]
+    static let presets = [5, 10, 20, 30, 45, 60]
 
     private static let endNotificationID = "com.maldeus.NBExercise.exerciseTimerEnd"
 

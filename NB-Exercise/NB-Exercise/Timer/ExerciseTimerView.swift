@@ -17,6 +17,11 @@ struct ExerciseTimerView: View {
     /// able to explain itself on demand.
     @State private var isShowingRecordingInfo = false
 
+    /// Minimum width of a duration preset capsule. Scaled so the six presets
+    /// wrap onto further rows at accessibility text sizes rather than
+    /// squeezing their labels.
+    @ScaledMetric(relativeTo: .footnote) private var presetMinWidth: CGFloat = 52
+
     var body: some View {
         NavigationStack {
             GeometryReader { geo in
@@ -266,10 +271,19 @@ struct ExerciseTimerView: View {
             .accessibilityLabel("Exercise duration")
             .accessibilityValue("\(store.durationMinutes) minutes")
 
-            HStack(spacing: 8) {
+            // Six presets no longer fit a single row at their intrinsic
+            // width, so the capsules share the row evenly and wrap once the
+            // text gets large enough that they can't.
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: presetMinWidth), spacing: 6)],
+                spacing: 6
+            ) {
                 ForEach(ExerciseTimerStore.presets, id: \.self) { minutes in
-                    Button("\(minutes)") {
+                    Button {
                         store.setDuration(minutes)
+                    } label: {
+                        Text("\(minutes)")
+                            .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
                     .buttonBorderShape(.capsule)
