@@ -12,6 +12,7 @@
 //      browses episodes.
 //
 
+import AppIntents
 import SwiftUI
 import SwiftData
 
@@ -47,6 +48,25 @@ struct NBExerciseApp: App {
         // the timer stays runnable without HealthKit (see its `#Preview`).
         let timer = ExerciseTimerStore()
         timer.recorder = HealthKitWorkoutRecorder()
+        timer.liveActivity = ExerciseLiveActivityController()
+
+        // The Live Activity's buttons are App Intents, so they can be
+        // performed in a process launched headlessly — with no window, and no
+        // view having appeared to do this wiring. `App.init()` is the only
+        // place that runs on *every* launch, including those, and an
+        // unregistered `@Dependency` is an uncatchable `fatalError`.
+        //
+        // The captures are strong on purpose. Both objects live for the
+        // process either way, and the registry is global — a weak timer that
+        // got released would turn every button on the watch into a silent
+        // no-op, which is a worse failure than holding a reference.
+        let controls = ExerciseSessionControls()
+        controls.pause = { timer.pause() }
+        // Resuming *is* starting: `start()` picks up from `remaining` rather
+        // than restarting the clock, and tells the recorder to resume.
+        controls.resume = { timer.start() }
+        controls.finish = { timer.finish() }
+        AppDependencyManager.shared.add(dependency: controls)
 
         _timerStore = State(initialValue: timer)
         _statsStore = State(

@@ -134,6 +134,24 @@ final class ExerciseTimerStore {
     /// HealthKit collects invalidates only the strip.
     var liveMetrics: LiveWorkoutMetrics { recorder?.metrics ?? .empty }
 
+    // MARK: - Live Activity seam
+
+    /// Mirrors the session to the Lock Screen, the Dynamic Island and — the
+    /// reason it's here — the Apple Watch Smart Stack. Injected in
+    /// `NBExerciseApp` and optional for the same reason the recorder is:
+    /// previews and tests run the timer without ActivityKit.
+    var liveActivity: ExerciseLiveActivityController?
+
+    /// When the last metrics push went out, for the throttle below.
+    private var lastLiveActivityPush: Date?
+
+    /// How often live metrics are pushed while a session runs. The countdown
+    /// needs no pushes at all — the Live Activity ticks it locally from
+    /// `endDate` — so these exist purely to refresh heart rate and energy, and
+    /// ActivityKit meters an app's updates. Half a minute keeps the figures
+    /// current without spending the budget in the first two minutes.
+    private static let liveActivityUpdateInterval: TimeInterval = 30
+
     // MARK: - Internal timing state
 
     private var endDate: Date?
@@ -183,6 +201,16 @@ final class ExerciseTimerStore {
             motivationalMessage = motivation.message
         }
 
+        // Starts the activity, or updates the existing one when this call is
+        // an un-pause. The controller works out which.
+        lastLiveActivityPush = Date()
+        liveActivity?.start(
+            activityName: activity.displayName,
+            symbolName: activity.symbolName,
+            totalDuration: TimeInterval(durationMinutes * 60),
+            state: liveActivityState()
+        )
+
         // Resume an existing recording rather than starting a second one when
         // the user un-pauses.
         Task { [recorder, activity] in
@@ -207,39 +235,85 @@ final class ExerciseTimerStore {
         if let endDate {
             remaining = max(0, endDate.timeIntervalSinceNow)
         }
-        endDate = nil
-        isRunning = false
-        tickerTask?.cancel()
-        tickerTask = nil
-        cancelEndNotification()
-        updateScreenWakeLock()
+        stopClock()
 
         // "Keep going" over a stopped clock is the wrong thing to say. The
         // provider keeps its state, so resuming picks up where it left off.
         motivationalMessage = nil
+
+        // Pushed unthrottled: the button the user just pressed has to flip on
+        // the wrist straight away, or they'll press it again.
+        pushLiveActivity()
 
         Task { [recorder] in await recorder?.pause() }
     }
 
     /// Stops and clears the session without saving it.
     func reset() {
-        tickerTask?.cancel()
-        tickerTask = nil
-        endDate = nil
-        isRunning = false
+        stopClock()
         hasFinished = false
         recordingWarning = nil
         remaining = TimeInterval(durationMinutes * 60)
-        cancelEndNotification()
-        updateScreenWakeLock()
 
         motivation.reset()
         motivationalMessage = nil
         completionMessage = nil
 
+        // Nothing worth glancing at afterwards, so the activity goes away
+        // immediately rather than lingering on the Lock Screen.
+        liveActivity?.cancel()
+
         // A reset is an abandonment, not a completion — discard rather than
         // save, so a mis-tap doesn't litter Health with 4-second workouts.
         Task { [recorder] in await recorder?.discard() }
+    }
+
+    /// Ends the session now and saves what was done.
+    ///
+    /// This is what the Live Activity's End button calls, and it's
+    /// deliberately not `reset()`: someone stopping ten minutes into a twenty
+    /// minute walk has still walked for ten minutes and should get the credit.
+    /// Reaching zero on its own goes through `tick()`, which does the same
+    /// save.
+    func finish() {
+        // Nothing has run, so there's nothing to save — and no activity to
+        // end. Guards against a stale button in an activity the app has
+        // already moved on from.
+        guard isRunning || remaining < TimeInterval(durationMinutes * 60) else {
+            return
+        }
+
+        stopClock()
+
+        // The final card, before the counters go back to their idle values.
+        liveActivity?.end(liveActivityState(hasFinished: true))
+
+        remaining = TimeInterval(durationMinutes * 60)
+        hasFinished = false
+        motivation.reset()
+        motivationalMessage = nil
+        completionMessage = nil
+
+        Task { [recorder] in
+            guard let recorder else { return }
+            do { try await recorder.end() }
+            catch {
+                self.recordingWarning =
+                    "Couldn't save this session to Health: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Stops the countdown and hands back everything held only while it runs.
+    /// Leaves `remaining` alone — each caller has its own idea of what should
+    /// be left on the clock afterwards.
+    private func stopClock() {
+        tickerTask?.cancel()
+        tickerTask = nil
+        endDate = nil
+        isRunning = false
+        cancelEndNotification()
+        updateScreenWakeLock()
     }
 
     // MARK: - Ticking
@@ -266,6 +340,7 @@ final class ExerciseTimerStore {
         guard r <= 0 else {
             remaining = r
             updateMotivation(remaining: r)
+            pushLiveActivityIfDue()
             return
         }
 
@@ -293,6 +368,10 @@ final class ExerciseTimerStore {
         // banner next time they unlock.
         cancelEndNotification()
 
+        // Leaves the sign-off on the Lock Screen and the watch briefly, so a
+        // glance right after the session still shows how it went.
+        liveActivity?.end(liveActivityState())
+
         // Finishing the countdown is a completed session: save it.
         Task { [recorder] in
             guard let recorder else { return }
@@ -302,6 +381,48 @@ final class ExerciseTimerStore {
                     "Couldn't save this session to Health: \(error.localizedDescription)"
             }
         }
+    }
+
+    // MARK: - Live Activity
+
+    /// Snapshots the session for the Live Activity.
+    ///
+    /// `endDate` goes across rather than a formatted countdown so the activity
+    /// can tick its own clock — see `ExerciseSessionAttributes`.
+    private func liveActivityState(
+        hasFinished: Bool? = nil
+    ) -> ExerciseSessionAttributes.ContentState {
+        let metrics = liveMetrics
+        return ExerciseSessionAttributes.ContentState(
+            endDate: endDate,
+            remaining: remaining,
+            isRunning: isRunning,
+            hasFinished: hasFinished ?? self.hasFinished,
+            heartRate: metrics.heartRate,
+            activeEnergyBurnedKilocalories: metrics.activeEnergyBurnedKilocalories,
+            distanceMeters: metrics.distanceMeters,
+            // The countdown has handed over to the sign-off by the time
+            // there's a completion message, matching what the app shows.
+            message: motivationalMessage ?? completionMessage
+        )
+    }
+
+    /// Pushes the current state immediately. For transport changes, where the
+    /// user is waiting to see the button they pressed take effect.
+    private func pushLiveActivity() {
+        guard let liveActivity else { return }
+        lastLiveActivityPush = Date()
+        liveActivity.update(liveActivityState())
+    }
+
+    /// Pushes the current state if the throttle has elapsed. Called from the
+    /// 200ms ticker, which is far too often to push on every tick.
+    private func pushLiveActivityIfDue() {
+        if let last = lastLiveActivityPush,
+           Date().timeIntervalSince(last) < Self.liveActivityUpdateInterval {
+            return
+        }
+        pushLiveActivity()
     }
 
     // MARK: - Motivation
