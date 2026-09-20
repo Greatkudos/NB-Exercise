@@ -49,7 +49,7 @@ struct ExerciseTimerView: View {
                         activityPicker
                         durationControl
                         controlButtons
-                        motivationToggle
+                        sessionToggles
                     }
                     .frame(maxWidth: 520)
                     .frame(maxWidth: .infinity)
@@ -143,13 +143,23 @@ struct ExerciseTimerView: View {
         .transition(.opacity)
     }
 
-    private var motivationToggle: some View {
-        Toggle(isOn: $store.showsMotivation) {
-            Label("Motivational Messages", systemImage: "quote.bubble")
+    /// The two per-session preferences. Grouped tightly rather than inheriting
+    /// the stack's 28pt spacing, so they read as one block of settings under
+    /// the controls instead of two stray rows.
+    private var sessionToggles: some View {
+        VStack(spacing: 12) {
+            Toggle(isOn: $store.showsMotivation) {
+                Label("Motivational Messages", systemImage: "quote.bubble")
+            }
+            .accessibilityHint("Shows encouragement under the countdown while a session runs")
+
+            Toggle(isOn: $store.keepsScreenAwake) {
+                Label("Keep Screen Awake", systemImage: "sun.max")
+            }
+            .accessibilityHint("Stops the screen dimming and locking while a session runs")
         }
         .font(.subheadline)
         .foregroundStyle(.secondary)
-        .accessibilityHint("Shows encouragement under the countdown while a session runs")
     }
 
     // MARK: - Recording indicator

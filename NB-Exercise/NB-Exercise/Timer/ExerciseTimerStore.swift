@@ -23,6 +23,7 @@ import Foundation
 import Observation
 import UserNotifications
 import AudioToolbox
+import UIKit
 
 @MainActor
 @Observable
@@ -81,11 +82,37 @@ final class ExerciseTimerStore {
 
     private static let motivationKey = "ExerciseTimer.showsMotivation"
 
+    // MARK: - Screen
+
+    /// Holds the screen awake while a session runs, so the countdown is still
+    /// there when the user looks back at it between sets. Persisted, and on by
+    /// default — a timer that blanks a minute in is the more surprising
+    /// behaviour, and the battery cost is something the user can opt out of.
+    var keepsScreenAwake: Bool {
+        didSet {
+            UserDefaults.standard.set(keepsScreenAwake, forKey: Self.screenAwakeKey)
+            updateScreenWakeLock()
+        }
+    }
+
+    private static let screenAwakeKey = "ExerciseTimer.keepsScreenAwake"
+
     init() {
         // `bool(forKey:)` would read a missing value as false, which would
-        // ship the feature switched off.
+        // ship these features switched off.
         showsMotivation =
             UserDefaults.standard.object(forKey: Self.motivationKey) as? Bool ?? true
+        keepsScreenAwake =
+            UserDefaults.standard.object(forKey: Self.screenAwakeKey) as? Bool ?? true
+    }
+
+    /// Suppresses the system idle timer only while a session is actually
+    /// running. Apple's guidance is to hold it for as short a window as
+    /// possible, so pausing, resetting or finishing hands it straight back —
+    /// and the timing itself doesn't depend on it, since `remaining` is
+    /// derived from `endDate` and the end alert is a scheduled notification.
+    private func updateScreenWakeLock() {
+        UIApplication.shared.isIdleTimerDisabled = keepsScreenAwake && isRunning
     }
 
     // MARK: - Recording seam
@@ -147,6 +174,7 @@ final class ExerciseTimerStore {
 
         scheduleTicker()
         scheduleEndNotification(in: resumeFrom)
+        updateScreenWakeLock()
 
         // `resume` rather than a full restart: milestones already passed
         // stay passed, so un-pausing doesn't re-announce the halfway mark.
@@ -184,6 +212,7 @@ final class ExerciseTimerStore {
         tickerTask?.cancel()
         tickerTask = nil
         cancelEndNotification()
+        updateScreenWakeLock()
 
         // "Keep going" over a stopped clock is the wrong thing to say. The
         // provider keeps its state, so resuming picks up where it left off.
@@ -202,6 +231,7 @@ final class ExerciseTimerStore {
         recordingWarning = nil
         remaining = TimeInterval(durationMinutes * 60)
         cancelEndNotification()
+        updateScreenWakeLock()
 
         motivation.reset()
         motivationalMessage = nil
@@ -246,6 +276,9 @@ final class ExerciseTimerStore {
         tickerTask?.cancel()
         tickerTask = nil
         playEndAlertSound()
+        // The session is over: let the screen lock as it normally would,
+        // rather than burning battery on a completion banner.
+        updateScreenWakeLock()
 
         // The countdown slot hands over to the sign-off, and the next
         // session deserves a full deck and a fresh set of milestones.
