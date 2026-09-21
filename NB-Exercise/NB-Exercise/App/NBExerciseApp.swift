@@ -50,6 +50,17 @@ struct NBExerciseApp: App {
         timer.recorder = HealthKitWorkoutRecorder()
         timer.liveActivity = ExerciseLiveActivityController()
 
+        // Listening for a workout mirrored from the Apple Watch has to be set
+        // up here for the same reason the App Intent dependency below does:
+        // the system launches this app in the background to deliver a
+        // mirrored session, and Apple's guidance is to assign the handler as
+        // soon as the app launches or the session is missed. `App.init()` is
+        // the only code that runs on every launch, headless ones included.
+        let mirrored = MirroredWorkoutSession()
+        mirrored.timerStore = timer
+        mirrored.beginListening()
+        timer.watch = mirrored
+
         // The Live Activity's buttons are App Intents, so they can be
         // performed in a process launched headlessly — with no window, and no
         // view having appeared to do this wiring. `App.init()` is the only

@@ -123,16 +123,22 @@ final class ExerciseTimerStore {
     var recorder: (any WorkoutRecorder)?
 
     /// Whether a recording is currently attached and live — drives the "REC"
-    /// affordance in the timer view.
-    var isRecording: Bool { recorder?.state.isActive ?? false }
+    /// affordance in the timer view. A watch session is always recording:
+    /// that's the only reason the watch started one.
+    var isRecording: Bool {
+        isRemote ? true : (recorder?.state.isActive ?? false)
+    }
 
     /// The live figures for the session in progress, for the metrics strip
     /// under the countdown. `.empty` when nothing is recording.
     ///
     /// Reading through to the recorder rather than mirroring its values means
     /// a view touching this observes the recorder directly, so each sample
-    /// HealthKit collects invalidates only the strip.
-    var liveMetrics: LiveWorkoutMetrics { recorder?.metrics ?? .empty }
+    /// HealthKit collects invalidates only the strip. A watch session has no
+    /// local recorder to read through to, so its figures are held here.
+    var liveMetrics: LiveWorkoutMetrics {
+        isRemote ? remoteMetrics : (recorder?.metrics ?? .empty)
+    }
 
     // MARK: - Live Activity seam
 
@@ -152,6 +158,51 @@ final class ExerciseTimerStore {
     /// current without spending the budget in the first two minutes.
     private static let liveActivityUpdateInterval: TimeInterval = 30
 
+    // MARK: - Remote (watch-owned) sessions
+
+    /// True while an Apple Watch is running the session and this store is
+    /// mirroring it. Everything on screen works the same way — the countdown,
+    /// the metrics strip, the motivation lines, the Live Activity — but the
+    /// transport buttons become remote controls, because the watch owns the
+    /// `HKWorkoutSession` and only it can pause or end one.
+    private(set) var isRemote: Bool = false
+
+    /// The channel back to the watch. Set by `MirroredWorkoutSession` when it
+    /// adopts a session, cleared when the session ends.
+    var remote: (any RemoteSessionControlling)?
+
+    /// Figures from the watch's last snapshot. Held rather than read through
+    /// because there's no local recorder collecting them.
+    private var remoteMetrics: LiveWorkoutMetrics = .empty
+
+    /// Promotes a session to the Apple Watch. Injected in `NBExerciseApp`;
+    /// optional like the recorder and the Live Activity, so previews and
+    /// tests run the timer without HealthKit.
+    var watch: (any WatchSessionPromoting)?
+
+    /// Whether the Start on Watch affordance is worth showing.
+    var canStartOnWatch: Bool {
+        !isRemote && !isRunning && (watch?.isWatchAvailable ?? false)
+    }
+
+    /// Asks the watch app to run this session instead of the phone.
+    ///
+    /// Nothing is started here on success: the watch starts the session and
+    /// mirrors it straight back, and this store adopts it through
+    /// `applyRemoteSnapshot` like any other watch-driven session. So a failure
+    /// is the only thing worth reporting, and it leaves the timer exactly
+    /// where it was — the user can just press Start instead.
+    func startOnWatch() async {
+        guard let watch else { return }
+        recordingWarning = nil
+        do {
+            try await watch.startOnWatch(activity)
+        } catch {
+            recordingWarning =
+                "Couldn't start this on your Apple Watch: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: - Internal timing state
 
     private var endDate: Date?
@@ -163,8 +214,10 @@ final class ExerciseTimerStore {
         let clamped = min(max(minutes, Self.minMinutes), Self.maxMinutes)
         durationMinutes = clamped
         // Changing the dial mid-session shouldn't yank the clock out from
-        // under a running timer; the new length applies to the next one.
-        if !isRunning {
+        // under a running timer; the new length applies to the next one. A
+        // watch session counts as running even while paused — its length is
+        // the watch's to decide, and the next snapshot would overwrite this.
+        if !isRunning && !isRemote {
             remaining = TimeInterval(clamped * 60)
             hasFinished = false
             // Which milestones are worth announcing depends on the length,
@@ -178,6 +231,12 @@ final class ExerciseTimerStore {
     // MARK: - Transport
 
     func start() {
+        // The watch owns its session, so this is a request, not a change. The
+        // state that comes back in the next snapshot is what moves the UI.
+        if isRemote {
+            remote?.send(.resume)
+            return
+        }
         guard !isRunning else { return }
         hasFinished = false
         recordingWarning = nil
@@ -229,6 +288,10 @@ final class ExerciseTimerStore {
     }
 
     func pause() {
+        if isRemote {
+            remote?.send(.pause)
+            return
+        }
         guard isRunning else { return }
         // Snapshot the live remaining time before tearing down the ticker so
         // resuming continues from exactly where we paused.
@@ -250,6 +313,10 @@ final class ExerciseTimerStore {
 
     /// Stops and clears the session without saving it.
     func reset() {
+        if isRemote {
+            remote?.send(.discard)
+            return
+        }
         stopClock()
         hasFinished = false
         recordingWarning = nil
@@ -276,6 +343,11 @@ final class ExerciseTimerStore {
     /// Reaching zero on its own goes through `tick()`, which does the same
     /// save.
     func finish() {
+        if isRemote {
+            remote?.send(.finish)
+            return
+        }
+
         // Nothing has run, so there's nothing to save — and no activity to
         // end. Guards against a stale button in an activity the app has
         // already moved on from.
@@ -313,6 +385,126 @@ final class ExerciseTimerStore {
         endDate = nil
         isRunning = false
         cancelEndNotification()
+        updateScreenWakeLock()
+    }
+
+    // MARK: - Remote sessions
+
+    /// Takes the watch's latest snapshot as the truth for this screen.
+    ///
+    /// Adoption and update are one code path on purpose. HealthKit will hand
+    /// this app a mirrored session it has never seen before — after the two
+    /// devices reconnect, or after launching the app headlessly part-way
+    /// through a workout — so there's no "session started" moment to hang
+    /// setup off. Every snapshot is complete, so the first one to arrive is
+    /// enough to reconstruct the whole screen whenever it arrives.
+    func applyRemoteSnapshot(_ snapshot: ExerciseSessionSnapshot) {
+        let isAdopting = !isRemote
+        let wasRunning = isRunning
+
+        if isAdopting {
+            // Apple Watch runs one workout session at a time and the watch's
+            // has won. Discard rather than save what was going here: a few
+            // seconds of phone-side session isn't a workout, and two
+            // overlapping records of one walk is worse than none.
+            if recorder?.state.isActive == true {
+                Task { [recorder] in await recorder?.discard() }
+            }
+            isRemote = true
+            recordingWarning = nil
+            completionMessage = nil
+            motivation.reset()
+        }
+
+        activity = snapshot.activity
+        durationMinutes = min(
+            max(Int((snapshot.totalDuration / 60).rounded()), Self.minMinutes),
+            Self.maxMinutes
+        )
+        endDate = snapshot.endDate
+        remaining = max(0, snapshot.remaining)
+        isRunning = snapshot.isRunning
+        hasFinished = snapshot.hasFinished
+        remoteMetrics = LiveWorkoutMetrics(
+            elapsed: snapshot.elapsed,
+            heartRate: snapshot.heartRate,
+            activeEnergyBurnedKilocalories: snapshot.activeEnergyBurnedKilocalories,
+            distanceMeters: snapshot.distanceMeters
+        )
+
+        if isRunning {
+            // The phone ticks its own clock from `endDate`, so the countdown
+            // stays smooth between the watch's pushes rather than jumping
+            // every few seconds — and stays right through a gap in contact.
+            if tickerTask == nil { scheduleTicker() }
+            if (isAdopting || !wasRunning) && showsMotivation {
+                motivation.resume()
+                motivationalMessage = motivation.message
+            }
+        } else {
+            tickerTask?.cancel()
+            tickerTask = nil
+            // "Keep going" over a stopped clock is the wrong thing to say.
+            motivationalMessage = nil
+        }
+        updateScreenWakeLock()
+
+        if isAdopting {
+            // The session reaches the Lock Screen and the Smart Stack the
+            // same way a local one does. Nothing downstream needs to know a
+            // watch started it.
+            lastLiveActivityPush = Date()
+            liveActivity?.start(
+                activityName: activity.displayName,
+                symbolName: activity.symbolName,
+                totalDuration: TimeInterval(durationMinutes * 60),
+                state: liveActivityState()
+            )
+        } else if wasRunning != isRunning {
+            // Unthrottled for the same reason a local pause is: the user is
+            // waiting to see the button they pressed take effect. Metrics
+            // ride the throttle in `tick()`.
+            pushLiveActivity()
+        }
+    }
+
+    /// Lets go of a watch session. The watch has already saved or discarded
+    /// the workout by the time this runs — all that's left is to put this
+    /// screen back.
+    func endRemoteSession(_ snapshot: ExerciseSessionSnapshot?) {
+        guard isRemote else { return }
+
+        stopClock()
+
+        // Applied before the final card is built so it carries the watch's
+        // closing figures rather than whatever the last push happened to say.
+        if let snapshot {
+            remaining = max(0, snapshot.remaining)
+            hasFinished = snapshot.hasFinished || hasFinished
+            remoteMetrics = LiveWorkoutMetrics(
+                elapsed: snapshot.elapsed,
+                heartRate: snapshot.heartRate,
+                activeEnergyBurnedKilocalories: snapshot.activeEnergyBurnedKilocalories,
+                distanceMeters: snapshot.distanceMeters
+            )
+        }
+
+        // Built while `isRemote` is still true, so `liveMetrics` still reads
+        // the watch's figures and not an empty local recorder.
+        liveActivity?.end(liveActivityState())
+
+        isRemote = false
+        remote = nil
+        remoteMetrics = .empty
+        motivationalMessage = nil
+
+        // A session that ran to zero keeps its finished state and its empty
+        // clock, matching what `tick()` leaves behind locally — the
+        // completion banner is the only confirmation this device gives. One
+        // stopped early has nothing to show, so the dial goes back to full.
+        if !hasFinished {
+            remaining = TimeInterval(durationMinutes * 60)
+        }
         updateScreenWakeLock()
     }
 
@@ -366,6 +558,12 @@ final class ExerciseTimerStore {
         // The scheduled notification is either firing now or has already
         // fired — clear any delivered copy so the user doesn't meet a stale
         // banner next time they unlock.
+        // A watch session saves itself and sends a final snapshot when it's
+        // done, which `endRemoteSession` acts on. Ending the Live Activity or
+        // the recorder from here would duplicate that at best and race it at
+        // worst — and there's no local recorder to end in the first place.
+        guard !isRemote else { return }
+
         cancelEndNotification()
 
         // Leaves the sign-off on the Lock Screen and the watch briefly, so a

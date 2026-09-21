@@ -10,64 +10,11 @@
 //  data (see `SampleWorkoutStore`), and it means adding workout *recording*
 //  later is a new conformance rather than a change to anything on screen.
 //
+//  `ExerciseActivity` used to live here and now has its own file — it's shared
+//  with the watch target, and these stats types aren't.
+//
 
 import Foundation
-
-/// The kind of activity a workout recorded. A deliberately small subset of
-/// `HKWorkoutActivityType` — the handful this app presents — plus `.other` as
-/// the catch-all so an unrecognised type from Health never gets dropped.
-enum ExerciseActivity: String, CaseIterable, Identifiable, Sendable {
-    case walking
-    case running
-    case cycling
-    case hiking
-    case swimming
-    case rowing
-    case elliptical
-    case strength
-    case yoga
-    case coreTraining
-    case highIntensityIntervalTraining
-    case other
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .walking: return "Walk"
-        case .running: return "Run"
-        case .cycling: return "Cycle"
-        case .hiking: return "Hike"
-        case .swimming: return "Swim"
-        case .rowing: return "Row"
-        case .elliptical: return "Elliptical"
-        case .strength: return "Strength"
-        case .yoga: return "Yoga"
-        case .coreTraining: return "Core"
-        case .highIntensityIntervalTraining: return "HIIT"
-        case .other: return "Workout"
-        }
-    }
-
-    /// SF Symbol matching the activity, reusing Apple's own workout glyphs so
-    /// the icons read the same way they do in Fitness.
-    var symbolName: String {
-        switch self {
-        case .walking: return "figure.walk"
-        case .running: return "figure.run"
-        case .cycling: return "figure.outdoor.cycle"
-        case .hiking: return "figure.hiking"
-        case .swimming: return "figure.pool.swim"
-        case .rowing: return "figure.rower"
-        case .elliptical: return "figure.elliptical"
-        case .strength: return "figure.strengthtraining.traditional"
-        case .yoga: return "figure.yoga"
-        case .coreTraining: return "figure.core.training"
-        case .highIntensityIntervalTraining: return "figure.highintensity.intervaltraining"
-        case .other: return "figure.mixed.cardio"
-        }
-    }
-}
 
 /// One completed workout, flattened to the values this app displays. Energy is
 /// in kilocalories and distance in metres — converting to the user's preferred

@@ -34,6 +34,10 @@ struct ExerciseTimerView: View {
                         countdown(in: geo.size)
                         motivation
 
+                        if store.isRemote {
+                            mirroringBanner
+                        }
+
                         if store.isRecording {
                             liveMetrics
                         }
@@ -245,7 +249,7 @@ struct ExerciseTimerView: View {
             }
         }
         .pickerStyle(.menu)
-        .disabled(store.isRunning)
+        .disabled(isConfigurationLocked)
     }
 
     // MARK: - Duration
@@ -272,7 +276,7 @@ struct ExerciseTimerView: View {
                 in: Double(ExerciseTimerStore.minMinutes)...Double(ExerciseTimerStore.maxMinutes),
                 step: 1
             )
-            .disabled(store.isRunning)
+            .disabled(isConfigurationLocked)
             .accessibilityLabel("Exercise duration")
             .accessibilityValue("\(store.durationMinutes) minutes")
 
@@ -292,7 +296,7 @@ struct ExerciseTimerView: View {
                     }
                     .buttonStyle(.bordered)
                     .buttonBorderShape(.capsule)
-                    .disabled(store.isRunning)
+                    .disabled(isConfigurationLocked)
                     .accessibilityLabel("\(minutes) minutes")
                 }
             }
@@ -326,12 +330,44 @@ struct ExerciseTimerView: View {
             .buttonStyle(.bordered)
             .disabled(isAtRest)
         }
+
+        // Offered only with a watch to promote to, and only before a session
+        // starts. It's the better way to run one — heart rate is measured
+        // rather than absent, and energy measured rather than estimated — so
+        // it sits right under Start rather than in Settings.
+        if store.canStartOnWatch {
+            Button {
+                Task { await store.startOnWatch() }
+            } label: {
+                Label("Start on Apple Watch", systemImage: "applewatch")
+                    .font(.footnote)
+            }
+            .buttonStyle(.borderless)
+        }
+    }
+
+    /// Shown while an Apple Watch is running the session, because every
+    /// control on this screen then means something different: the buttons
+    /// are remote controls, and the figures are the watch's.
+    private var mirroringBanner: some View {
+        Label("Running on Apple Watch", systemImage: "applewatch.radiowaves.left.and.right")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("This session is running on your Apple Watch")
+    }
+
+    /// The activity and the duration belong to whoever owns the session. A
+    /// watch-driven one counts even while paused: its length is the watch's
+    /// to decide, and the next snapshot would overwrite anything set here.
+    private var isConfigurationLocked: Bool {
+        store.isRunning || store.isRemote
     }
 
     /// Nothing to reset when the timer is sitting untouched at its full
     /// duration.
     private var isAtRest: Bool {
         !store.isRunning
+            && !store.isRemote
             && !store.hasFinished
             && store.remaining == TimeInterval(store.durationMinutes * 60)
     }

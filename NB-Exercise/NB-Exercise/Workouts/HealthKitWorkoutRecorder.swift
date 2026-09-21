@@ -18,13 +18,9 @@
 //    - Energy on iPhone is estimated from motion, not measured. It's the
 //      right order of magnitude, not a calorimeter reading.
 //
-//  Not yet wired up (deliberately out of scope here):
-//    - A Live Activity, so the session stays visible on the Lock Screen. The
-//      `audio` background mode the app already declares for podcast playback
-//      keeps the process alive during a session with audio playing, but a
-//      silent session backgrounded for a long stretch can still be suspended.
-//    - `startWatchApp(with:)` to promote the session to the Watch, which is
-//      where heart rate would actually come from.
+//  Both caveats are why `MirroredWorkoutSession` exists: when an Apple Watch
+//  is running the session, this recorder stays out of it entirely and the
+//  figures come from the wrist, measured rather than estimated.
 //
 
 import Foundation
@@ -93,16 +89,12 @@ final class HealthKitWorkoutRecorder: NSObject, WorkoutRecorder {
         state = .starting
         metrics = .empty
         self.activity = activity
-        distanceType = Self.distanceType(for: activity)
+        distanceType = activity.distanceQuantityType
 
         do {
             try await store.requestAuthorization(toShare: shareTypes, read: readTypes)
 
-            let configuration = HKWorkoutConfiguration()
-            configuration.activityType = activity.hkWorkoutActivityType
-            // `.unknown` rather than guessing indoor/outdoor: the app never
-            // asks, and a wrong guess changes HealthKit's calorie model.
-            configuration.locationType = .unknown
+            let configuration = activity.workoutConfiguration
 
             let session = try HKWorkoutSession(
                 healthStore: store,
@@ -237,24 +229,6 @@ final class HealthKitWorkoutRecorder: NSObject, WorkoutRecorder {
         }
     }
 
-    // MARK: - Mapping
-
-    /// Which distance quantity the activity actually produces. Strength work
-    /// and yoga have none, so they get nil rather than a misleading zero.
-    private static func distanceType(for activity: ExerciseActivity) -> HKQuantityType? {
-        switch activity {
-        case .walking, .running, .hiking:
-            return HKQuantityType(.distanceWalkingRunning)
-        case .cycling:
-            return HKQuantityType(.distanceCycling)
-        case .swimming:
-            return HKQuantityType(.distanceSwimming)
-        case .rowing, .elliptical, .strength, .yoga,
-             .coreTraining, .highIntensityIntervalTraining, .other:
-            return nil
-        }
-    }
-
     enum RecordingError: LocalizedError {
         case healthDataUnavailable
 
@@ -319,28 +293,5 @@ extension HealthKitWorkoutRecorder: HKLiveWorkoutBuilderDelegate {
     nonisolated func workoutBuilderDidCollectEvent(_ workoutBuilder: HKLiveWorkoutBuilder) {
         // Pause and resume events reach the UI through the session delegate
         // above, so there's nothing to do with the builder's copy.
-    }
-}
-
-// MARK: - Activity mapping
-
-private extension ExerciseActivity {
-    /// The HealthKit type to record as. The inverse of the mapping in
-    /// `HealthKitWorkoutStore`, which narrows HealthKit's types down to these.
-    var hkWorkoutActivityType: HKWorkoutActivityType {
-        switch self {
-        case .walking: return .walking
-        case .running: return .running
-        case .cycling: return .cycling
-        case .hiking: return .hiking
-        case .swimming: return .swimming
-        case .rowing: return .rowing
-        case .elliptical: return .elliptical
-        case .strength: return .traditionalStrengthTraining
-        case .yoga: return .yoga
-        case .coreTraining: return .coreTraining
-        case .highIntensityIntervalTraining: return .highIntensityIntervalTraining
-        case .other: return .other
-        }
     }
 }
